@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CivicReporter - Welcome</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        #map { height: 500px; border-radius: 12px; z-index: 1; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-8">
+        <header class="text-center mb-12">
+            <h1 class="text-5xl font-bold text-gray-800">Welcome to CivicReporter</h1>
+            <p class="text-xl text-gray-600 mt-4">Your direct line to improving our city's infrastructure.</p>
+            <div class="mt-8 flex justify-center gap-4">
+                <a href="login.html" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-full hover:bg-blue-700 transition">Login</a>
+                <a href="register.html" class="bg-gray-200 text-gray-800 font-bold py-3 px-8 rounded-full hover:bg-gray-300 transition">Register</a>
+            </div>
+        </header>
+
+        <section id="analytics" class="mb-12">
+            <h2 class="text-3xl font-bold text-center mb-6 text-gray-800">Live Community Statistics</h2>
+            <div id="analyticsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6"></div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
+                <div class="bg-white p-6 rounded-lg shadow"><canvas id="statusChart"></canvas></div>
+                <div class="bg-white p-6 rounded-lg shadow"><canvas id="typeChart"></canvas></div>
+            </div>
+        </section>
+
+        <section id="live-map" class="mb-12">
+            <h2 class="text-3xl font-bold text-center mb-6 text-gray-800">Live Issue Map</h2>
+            <div id="map" class="w-full bg-white p-2 rounded-xl shadow-lg"></div>
+        </section>
+
+        <section id="reviews">
+            <h2 class="text-3xl font-bold text-center mb-6 text-gray-800">What People Are Saying</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div class="bg-white p-6 rounded-lg shadow-md"><p class="text-gray-600">"An amazing platform! I reported a pothole and saw its status change to resolved in just a few days. It's great to finally have a system that works."</p><p class="text-right font-bold mt-4 text-gray-800">- A. Sharma</p></div>
+                <div class="bg-white p-6 rounded-lg shadow-md"><p class="text-gray-600">"Finally, transparency in civic works. The live map shows exactly where the problems are. This is what a smart city should be."</p><p class="text-right font-bold mt-4 text-gray-800">- R. Verma</p></div>
+                <div class="bg-white p-6 rounded-lg shadow-md"><p class="text-gray-600">"I was skeptical at first, but this is a game-changer. It's so easy to report an issue, and you can actually see the progress."</p><p class="text-right font-bold mt-4 text-gray-800">- P. Singh</p></div>
+            </div>
+        </section>
+    </div>
+    <script>
+        const API_BASE_URL = 'http://127.0.0.1:8000';
+        
+        async function fetchPublicDashboardData() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/public-dashboard`);
+                const data = await response.json();
+                
+                renderDetailedAnalytics(data.analytics);
+                renderMap(data.reports);
+
+            } catch (error) { console.error("Failed to load dashboard data:", error); }
+        }
+
+        function renderDetailedAnalytics(analytics) {
+            const container = document.getElementById('analyticsContainer');
+            container.innerHTML = `
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">Total Reports</p><p class="text-2xl font-bold">${analytics.total}</p></div>
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">Pending</p><p class="text-2xl font-bold">${analytics.pending}</p></div>
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">In Progress</p><p class="text-2xl font-bold">${analytics.in_progress}</p></div>
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">Needs Verification</p><p class="text-2xl font-bold">${analytics.pending_verification}</p></div>
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">Resolved</p><p class="text-2xl font-bold">${analytics.resolved}</p></div>`;
+
+            const statusCtx = document.getElementById('statusChart').getContext('2d');
+            new Chart(statusCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Pending', 'In Progress', 'Needs Verification', 'Resolved'],
+                    datasets: [{
+                        data: [analytics.pending, analytics.in_progress, analytics.pending_verification, analytics.resolved],
+                        backgroundColor: ['#FBBF24', '#3B82F6', '#F97316', '#10B981'],
+                    }]
+                },
+                options: { plugins: { title: { display: true, text: 'Reports by Status' } } }
+            });
+
+            const typeCtx = document.getElementById('typeChart').getContext('2d');
+            new Chart(typeCtx, {
+                type: 'pie',
+                data: {
+                    labels: Object.keys(analytics.by_type),
+                    datasets: [{
+                        data: Object.values(analytics.by_type),
+                        backgroundColor: ['#EF4444', '#8B5CF6'],
+                    }]
+                },
+                options: { plugins: { title: { display: true, text: 'Reports by Issue Type' } } }
+            });
+        }
+
+        function renderMap(reports) {
+            const map = L.map('map').setView([23.2599, 77.4126], 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+            const icons = {
+                resolved: L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png', iconSize: [25, 41], iconAnchor: [12, 41] }),
+                pending: L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png', iconSize: [25, 41], iconAnchor: [12, 41] })
+            };
+            reports.forEach(report => {
+                const markerIcon = report.status === 'resolved' ? icons.resolved : icons.pending;
+                const detections = report.detections.map(d => d.detected_class).join(', ');
+                L.marker([report.latitude, report.longitude], { icon: markerIcon }).addTo(map).bindPopup(`<b>${detections}</b><br>Status: ${report.status.replace(/_/g, ' ')}`);
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', fetchPublicDashboardData);
+    </script>
+</body>
+</html>

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - CivicReporter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .status-badge { padding: 4px 12px; border-radius: 9999px; font-size: 0.8rem; font-weight: 600; text-transform: capitalize; }
+        .status-pending { background-color: #fef3c7; color: #92400e; }
+        .status-in_progress { background-color: #dbeafe; color: #1e40af; }
+        .status-pending_verification { background-color: #e0e7ff; color: #3730a3; }
+        .status-resolved { background-color: #d1fae5; color: #065f46; }
+        .map-container { height: 450px; border-radius: 12px; margin-top: 1.5rem; z-index: 1; }
+        .modal-backdrop { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.7); z-index: 50; align-items: center; justify-content: center; }
+        .modal-content { max-height: 90vh; }
+        .fa-star.fas { color: #f59e0b; }
+        .timeline { border-left: 2px solid #e5e7eb; margin-left: 0.5rem; padding-left: 1rem; }
+        .timeline-item { position: relative; }
+        .timeline-item::before { content: ''; position: absolute; left: -25px; top: 4px; width: 10px; height: 10px; background-color: #9ca3af; border-radius: 50%; }
+        #pdf-container { position: absolute; left: -9999px; top: auto; width: 800px; background: white; color: black; }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <div class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        <header class="bg-white shadow-md rounded-lg p-6 flex justify-between items-center mb-8">
+            <div><h1 class="text-3xl font-bold text-gray-900">CivicReporter Dashboard</h1><p id="welcomeMessage" class="text-gray-600 mt-1"></p></div>
+            <button id="logoutButton" class="bg-red-600 text-white py-2 px-5 rounded-lg hover:bg-red-700 transition">Logout</button>
+        </header>
+
+        <div id="citizenView" class="hidden space-y-8"></div>
+        <div id="officialView" class="hidden"></div>
+        <div id="superuserView" class="hidden"></div>
+    </div>
+    
+    <div id="rejectionModal" class="modal-backdrop"><div class="bg-white rounded-lg shadow-2xl p-6 m-4 w-full max-w-md"><h3 class="text-xl font-bold mb-4">Reason for Rejection</h3><textarea id="rejectionReasonText" class="w-full border-gray-300 rounded-lg" rows="4" placeholder="Explain why the resolution is not satisfactory..."></textarea><div class="flex justify-end gap-4 mt-4"><button id="cancelRejection" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-lg">Cancel</button><button id="submitRejection" class="bg-red-600 text-white py-2 px-4 rounded-lg">Submit Rejection</button></div></div></div>
+    <div id="reviewModal" class="modal-backdrop"><div class="bg-white rounded-lg shadow-2xl p-6 m-4 w-full max-w-md"><h3 class="text-xl font-bold mb-4">Leave a Review</h3><div class="flex justify-center text-3xl mb-4" id="star-rating"><i class="far fa-star cursor-pointer" data-value="1"></i><i class="far fa-star cursor-pointer" data-value="2"></i><i class="far fa-star cursor-pointer" data-value="3"></i><i class="far fa-star cursor-pointer" data-value="4"></i><i class="far fa-star cursor-pointer" data-value="5"></i></div><textarea id="reviewComment" class="w-full border-gray-300 rounded-lg" rows="4" placeholder="Share your experience... (optional)"></textarea><div class="flex justify-end gap-4 mt-4"><button id="cancelReview" class="bg-gray-200 text-gray-800 py-2 px-4 rounded-lg">Cancel</button><button id="submitReview" class="bg-blue-600 text-white py-2 px-4 rounded-lg">Submit Review</button></div></div></div>
+    <div id="imageModal" class="modal-backdrop"><div class="bg-white rounded-lg shadow-2xl p-4 m-4 modal-content"><img id="modalImage" src="" alt="Reported issue" class="max-w-full max-h-full object-contain"></div></div>
+    <div id="pdf-container"></div>
+
+    <script>
+        window.jsPDF = window.jspdf.jsPDF;
+        const token = localStorage.getItem('accessToken');
+        if (!token) window.location.href = 'index.html';
+        const API_BASE_URL = 'http://127.0.0.1:8000';
+        let currentUser;
+        let mapInstance = null;
+
+        async function initializeDashboard() {
+            const response = await fetch(`${API_BASE_URL}/users/me`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (!response.ok) { window.location.href = 'login.html'; return; }
+            
+            currentUser = await response.json();
+            document.getElementById('welcomeMessage').textContent = `Welcome, ${currentUser.full_name}! (${currentUser.user_type.replace(/_/g, ' ')})`;
+
+            if (currentUser.user_type === 'citizen') {
+                const view = document.getElementById('citizenView');
+                view.classList.remove('hidden');
+                view.innerHTML = `
+                    <div><h2 class="text-2xl font-bold mb-4 text-gray-800">Community Analytics</h2><div id="analyticsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6"></div></div>
+                    <div><h2 class="text-2xl font-bold mb-4 text-gray-800">Live Issue Map</h2><div id="citizenMap" class="w-full bg-white p-2 rounded-xl shadow map-container"></div></div>
+                    <div><h2 class="text-2xl font-bold mb-4 text-gray-800">Report a New Issue</h2><div class="space-y-6 bg-white shadow rounded-lg p-8"><div id="citizen-form-content"></div><div id="citizenResult" class="mt-6 hidden"></div></div></div>
+                    <div class="mt-12"><h2 class="text-2xl font-bold mb-4 text-gray-800">My Submitted Reports</h2><div id="myReportsContainer" class="space-y-4"></div></div>`;
+                renderCitizenForm();
+                setupCitizenViewListeners();
+                fetchDetailedAnalytics('analyticsContainer');
+                fetchAndDisplayMyReports();
+                fetchAndDisplayAllReportsOnMap('citizenMap');
+            } else if (currentUser.user_type === 'municipal_official' && currentUser.email.includes('supervisor')) {
+                 const view = document.getElementById('superuserView');
+                 view.classList.remove('hidden');
+                 view.innerHTML = `<h2 class="text-2xl font-bold mb-6 text-gray-800">Department Performance Report</h2><div id="performanceContainer" class="bg-white p-6 rounded-lg shadow"></div>`;
+                 fetchMcdPerformanceReport();
+            } else {
+                const view = document.getElementById('officialView');
+                view.classList.remove('hidden');
+                view.innerHTML = `
+                    <h2 class="text-2xl font-bold mb-6 text-gray-800">Reports Management</h2>
+                    <div class="bg-white p-4 rounded-lg shadow mb-6"><div class="grid grid-cols-1 md:grid-cols-4 gap-4"><select id="statusFilter" class="border-gray-300 rounded-lg"><option value="">All Statuses</option><option value="pending">Pending</option><option value="in_progress">In Progress</option><option value="pending_verification">Pending Verification</option><option value="resolved">Resolved</option></select><select id="zoneFilter" class="border-gray-300 rounded-lg"><option value="">All Zones</option><option value="Zone A">Zone A</option><option value="Zone B">Zone B</option><option value="Zone C">Zone C</option><option value="Zone D">Zone D</option></select><select id="typeFilter" class="border-gray-300 rounded-lg"><option value="">All Types</option><option value="pothole">Pothole</option><option value="garbage">Garbage</option></select><button id="applyFiltersBtn" class="bg-indigo-600 text-white rounded-lg">Apply Filters</button></div></div>
+                    <div id="officialMap" class="w-full bg-white p-2 rounded-xl shadow mb-6 map-container"></div>
+                    <div id="reportsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>`;
+                fetchAndDisplayReports(currentUser.user_type);
+                fetchAndDisplayAllReportsOnMap('officialMap');
+                document.getElementById('applyFiltersBtn').addEventListener('click', () => fetchAndDisplayReports(currentUser.user_type));
+            }
+            
+            document.getElementById('logoutButton').addEventListener('click', () => { localStorage.removeItem('accessToken'); window.location.href = 'index.html'; });
+            document.getElementById('imageModal').addEventListener('click', () => { document.getElementById('imageModal').style.display = 'none'; });
+        }
+
+        function renderMap(mapId, reports) {
+            if (mapInstance && document.getElementById(mapId) && document.getElementById(mapId)._leaflet_id != null) { mapInstance.remove(); }
+            mapInstance = L.map(mapId).setView([23.2599, 77.4126], 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(mapInstance);
+            const icons = {
+                pending: L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-yellow.png', iconSize: [25, 41], iconAnchor: [12, 41] }),
+                in_progress: L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png', iconSize: [25, 41], iconAnchor: [12, 41] }),
+                pending_verification: L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png', iconSize: [25, 41], iconAnchor: [12, 41] }),
+                resolved: L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png', iconSize: [25, 41], iconAnchor: [12, 41] }),
+                default: L.icon({ iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-grey.png', iconSize: [25, 41], iconAnchor: [12, 41] }),
+            };
+            reports.forEach(report => {
+                const markerIcon = icons[report.status] || icons.default;
+                const detections = report.detections.map(d => d.detected_class).join(', ');
+                L.marker([report.latitude, report.longitude], {icon: markerIcon}).addTo(mapInstance).bindPopup(`<b>${detections || 'Issue'}</b><br>${report.address_text}`);
+            });
+        }
+        
+        async function fetchAndDisplayAllReportsOnMap(mapId) {
+            const response = await fetch(`${API_BASE_URL}/api/public-dashboard`);
+            if (!response.ok) return;
+            const data = await response.json();
+            renderMap(mapId, data.reports);
+        }
+
+        function renderCitizenForm() {
+            document.getElementById('citizen-form-content').innerHTML = `<div><label class="block font-medium text-gray-700">1. Upload Photo</label><div class="mt-2 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md"><div class="space-y-1 text-center"><svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48"><path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg><div class="flex text-sm text-gray-600"><label for="fileInput" class="relative cursor-pointer bg-white rounded-md font-medium text-indigo-600 hover:text-indigo-500"><span>Upload a file</span><input id="fileInput" type="file" class="sr-only"></label></div><p class="text-xs text-gray-500">PNG or JPG</p></div></div><img id="previewImage" class="mt-4 mx-auto max-h-64 rounded-lg hidden"></div><div><label class="block font-medium text-gray-700">2. Confirm Location</label><div class="mt-2"><button id="getLocationBtn" class="bg-green-600 text-white py-2 px-4 rounded-lg w-full"><i class="fas fa-location-arrow mr-2"></i>Use My Current Location</button><p id="locationInfo" class="mt-2 text-gray-800 bg-gray-50 p-3 rounded-md hidden"></p></div></div><button id="processBtn" class="w-full bg-blue-600 text-white py-3 rounded-lg" disabled>Submit Report</button>`;
+        }
+
+        function setupCitizenViewListeners() {
+            const fileInput=document.getElementById("fileInput"),previewImage=document.getElementById("previewImage"),getLocationBtn=document.getElementById("getLocationBtn"),locationInfo=document.getElementById("locationInfo"),processBtn=document.getElementById("processBtn"),citizenResult=document.getElementById("citizenResult");let userLocation=null,uploadedFile=null;const updateSubmitButton=()=>{processBtn.disabled=!(uploadedFile&&userLocation)};fileInput.addEventListener("change",e=>{if(e.target.files.length>0){uploadedFile=e.target.files[0];previewImage.src=URL.createObjectURL(uploadedFile);previewImage.classList.remove("hidden");updateSubmitButton()}});getLocationBtn.addEventListener("click",()=>{getLocationBtn.textContent="Getting location...";getLocationBtn.disabled=!0;navigator.geolocation.getCurrentPosition(async e=>{userLocation={lat:e.coords.latitude,lon:e.coords.longitude};const t=await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${userLocation.lat}&lon=${userLocation.lon}`),o=await t.json();locationInfo.textContent=`Location Acquired: ${o.display_name}`;locationInfo.classList.remove("hidden");userLocation.address=o.display_name;getLocationBtn.textContent="Use My Current Location";getLocationBtn.disabled=!1;updateSubmitButton()},e=>{locationInfo.textContent=`Error: ${e.message}`;locationInfo.classList.remove("hidden");getLocationBtn.textContent="Use My Current Location";getLocationBtn.disabled=!1})});processBtn.addEventListener("click",async()=>{processBtn.textContent="Processing...";processBtn.disabled=!0;const e=new FormData;e.append("image",uploadedFile);e.append("latitude",userLocation.lat);e.append("longitude",userLocation.lon);e.append("address",userLocation.address);const t=await fetch(`${API_BASE_URL}/api/report`,{method:"POST",headers:{Authorization:`Bearer ${token}`},body:e}),o=await t.json();if(t.ok){let e=o.detections.map(e=>`${e.class} (${Math.round(100*e.confidence)}%)`).join(", ");citizenResult.innerHTML=`<div class="p-4 bg-green-100 text-green-800 rounded">Success! Report ID: ${o.report_id}. Detections: ${e}</div>`;fetchAndDisplayMyReports();fetchAndDisplayAllReportsOnMap("citizenMap")}else citizenResult.innerHTML=`<div class="p-4 bg-red-100 text-red-800 rounded">Error: ${o.detail}</div>`;citizenResult.classList.remove("hidden");processBtn.textContent="Submit Report";uploadedFile=null;previewImage.classList.add("hidden");fileInput.value="";updateSubmitButton()}); }
+        
+        async function fetchDetailedAnalytics(containerId) {
+            // CORRECTED: This now calls the correct single public endpoint and accesses the 'analytics' object
+            const response = await fetch(`${API_BASE_URL}/api/public-dashboard`);
+            const data = await response.json();
+            const analytics = data.analytics; 
+            document.getElementById(containerId).innerHTML = `
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">Total Reports</p><p class="text-2xl font-bold">${analytics.total}</p></div>
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">Pending</p><p class="text-2xl font-bold">${analytics.pending}</p></div>
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">In Progress</p><p class="text-2xl font-bold">${analytics.in_progress}</p></div>
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">Awaiting Verification</p><p class="text-2xl font-bold">${analytics.pending_verification}</p></div>
+                <div class="bg-white p-4 rounded-lg shadow text-center"><p class="text-xs text-gray-500">Resolved</p><p class="text-2xl font-bold">${analytics.resolved}</p></div>`;
+        }
+        
+        async function fetchAndDisplayMyReports() {
+            const response = await fetch(`${API_BASE_URL}/api/reports/my-reports`, { headers: { 'Authorization': `Bearer ${token}` } });
+            const reports = await response.json();
+            const myReportsContainer = document.getElementById('myReportsContainer');
+            myReportsContainer.innerHTML = '';
+            if (reports.length === 0) { myReportsContainer.innerHTML = '<p class="text-gray-500 text-center">You have not submitted any reports yet.</p>'; return; }
+            reports.forEach(report => { myReportsContainer.innerHTML += createMyReportCard(report); });
+            setupReviewListeners(reports);
+            document.querySelectorAll('.download-report-btn').forEach(button => {
+                button.addEventListener('click', e => {
+                    const reportId = e.target.dataset.reportId;
+                    const reportData = reports.find(r => r.id == reportId);
+                    if (reportData) generatePdfReport(reportData);
+                });
+            });
+        }
+
+        function createMyReportCard(report) {
+            const detections = report.detections.map(d => d.detected_class).join(', ');
+            const statusClass = `status-${report.status.replace(/_/g, '')}`;
+            let reviewButtonHtml = '';
+            if (report.status === 'resolved' && report.reviews.length === 0) {
+                reviewButtonHtml = `<button class="leave-review-btn mt-3 bg-yellow-500 text-white py-1 px-3 rounded-lg text-sm" data-report-id="${report.id}"><i class="fas fa-star mr-1"></i>Leave Review</button>`;
+            }
+            let rejectionReasonHtml = '';
+            if (report.rejection_reason && report.status === 'in_progress') {
+                rejectionReasonHtml = `<div class="mt-2 p-2 bg-red-50 border-l-4 border-red-400 text-red-700"><p class="font-bold">Inspector's Note</p><p class="text-sm">${report.rejection_reason}</p></div>`;
+            }
+            const timelineHtml = (report.timeline || []).map(t => `<li class="timeline-item pb-2"><strong class="capitalize">${t.status.replace(/_/g, ' ')}</strong> by ${t.actor} <br/><span class="text-xs text-gray-500">${new Date(t.timestamp).toLocaleString()}</span></li>`).join('');
+
+            return `<div class="bg-white shadow rounded-lg p-4"><div class="flex items-start justify-between"><div><p class="text-sm text-gray-500">ID: ${report.id} on ${new Date(report.submitted_at).toLocaleDateString()}</p><p class="font-semibold text-gray-800">${detections}</p><p class="text-sm text-gray-600">${report.address_text}</p></div><span class="status-badge ${statusClass}">${report.status.replace(/_/g, ' ')}</span></div>${rejectionReasonHtml}<div class="mt-3 flex gap-4 items-center"><button class="download-report-btn text-sm text-blue-600 hover:underline" data-report-id="${report.id}"><i class="fas fa-download mr-1"></i>Download Full Report</button>${reviewButtonHtml}</div><details class="mt-2 text-sm text-gray-600"><summary class="cursor-pointer font-semibold">View Timeline</summary><ul class="timeline mt-2">${timelineHtml}</ul></details></div>`;
+        }
+        
+        async function generatePdfReport(report) {
+            const container = document.getElementById('pdf-container');
+            let imageUrl = '';
+            try {
+                const response = await fetch(`${API_BASE_URL}/uploads/${report.image_filename}`);
+                const imageBlob = await response.blob();
+                imageUrl = await new Promise(resolve => { const reader = new FileReader(); reader.onloadend = () => resolve(reader.result); reader.readAsDataURL(imageBlob); });
+            } catch (e) { console.error("Could not load image for PDF:", e); }
+            const detections = report.detections.map(d => `${d.detected_class} (${Math.round(d.confidence_score * 100)}%)`).join(', ');
+            const timeline = (report.timeline || []).map(t => `<li><strong>${t.status.replace(/_/g, ' ')}</strong> by ${t.actor} on ${new Date(t.timestamp).toLocaleString()}` + (t.reason ? `<br/><span style="color: red;">Reason: ${t.reason}</span>` : '') + `</li>`).join('');
+            container.innerHTML = `<div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ccc;"><h2 style="color: #2c3e50;">CivicReporter - Issue Report #${report.id}</h2><hr/><p><strong>Status:</strong> ${report.status.replace(/_/g, ' ')}</p><p><strong>Location:</strong> ${report.address_text}</p><p><strong>AI Detections:</strong> ${detections}</p><img src="${imageUrl}" style="max-width: 100%; border-radius: 5px; margin-top: 10px;"/><h3 style="margin-top: 15px;">Report Timeline</h3><ul style="padding-left: 20px;">${timeline}</ul></div>`;
+            const contentToPrint = container.firstElementChild;
+            const canvas = await html2canvas(contentToPrint, { scale: 2, useCORS: true });
+            const imgData = canvas.toDataURL('image/png');
+            const pdf = new jsPDF('p', 'mm', 'a4');
+            const pdfWidth = pdf.internal.pageSize.getWidth();
+            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+            pdf.addImage(imgData, 'PNG', 10, 10, pdfWidth - 20, pdfHeight - 20);
+            pdf.save(`Report_${report.id}.pdf`);
+            container.innerHTML = '';
+        }
+
+        function setupReviewListeners(reports) { document.querySelectorAll('.leave-review-btn').forEach(button => { button.addEventListener('click', e => { const reportId = e.target.dataset.reportId; const modal = document.getElementById('reviewModal'); modal.style.display = 'flex'; let currentRating = 0; const stars = modal.querySelectorAll('#star-rating i'); stars.forEach(star => { star.onmouseover = () => { stars.forEach((s, i) => { s.className = i < star.dataset.value ? 'fas fa-star cursor-pointer' : 'far fa-star cursor-pointer'; }); }; star.onmouseout = () => { stars.forEach((s, i) => { s.className = i < currentRating ? 'fas fa-star cursor-pointer' : 'far fa-star cursor-pointer'; }); }; star.onclick = () => { currentRating = star.dataset.value; }; }); document.getElementById('submitReview').onclick = async () => { if (currentRating === 0) { alert('Please select a rating.'); return; } await fetch(`${API_BASE_URL}/api/reports/${reportId}/review`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ rating: parseInt(currentRating), comment: document.getElementById('reviewComment').value }) }); modal.style.display = 'none'; fetchAndDisplayMyReports(); }; document.getElementById('cancelReview').onclick = () => { modal.style.display = 'none'; }; }); }); }
+        async function fetchAndDisplayReports(userType) { const status = document.getElementById('statusFilter').value; const zone = document.getElementById('zoneFilter').value; const issue_type = document.getElementById('typeFilter').value; const params = new URLSearchParams({ status, zone, issue_type }).toString(); const response = await fetch(`${API_BASE_URL}/api/reports?${params}`, { headers: { 'Authorization': `Bearer ${token}` } }); const reports = await response.json(); document.getElementById('reportsGrid').innerHTML = ''; reports.forEach(report => { document.getElementById('reportsGrid').innerHTML += createReportCard(report, userType); }); addCardEventListeners(userType); }
+        function createReportCard(report, userType) { const detections = report.detections.map(d => `<span class="bg-gray-200 text-gray-800 text-xs font-semibold mr-2 px-2.5 py-0.5 rounded-full">${d.detected_class} (${Math.round(d.confidence_score * 100)}%)</span>`).join(' '); const statusClass = `status-${report.status.replace(/_/g, '')}`; let actionHtml = ''; if (userType === 'municipal_official') { actionHtml = `<label class="text-sm font-semibold text-gray-600">Update Status:</label><div class="flex gap-2 mt-2"><select id="status-select-${report.id}" class="w-full border-gray-300 rounded-lg"><option value="in_progress" ${report.status === 'in_progress' ? 'selected' : ''}>In Progress</option><option value="pending_verification" ${report.status === 'pending_verification' ? 'selected' : ''}>Mark as Resolved</option></select><button class="update-status-btn bg-indigo-600 text-white px-4 rounded-lg" data-report-id="${report.id}">Save</button></div>`; } else if (userType === 'inspection_officer' && report.status === 'pending_verification') { actionHtml = `<label class="text-sm font-semibold text-gray-600">Verify Resolution:</label><div class="flex gap-2 mt-2"><button class="verify-btn w-1/2 bg-green-500 text-white py-2 rounded-lg" data-report-id="${report.id}" data-approve="true">Approve</button><button class="verify-btn w-1/2 bg-red-500 text-white py-2 rounded-lg" data-report-id="${report.id}" data-approve="false">Reject</button></div>`; } return `<div class="bg-white shadow-lg rounded-xl overflow-hidden"><img src="${API_BASE_URL}/uploads/${report.image_filename}" class="w-full h-48 object-cover cursor-pointer report-image" data-img-src="${API_BASE_URL}/uploads/${report.image_filename}"><div class="p-5"><div class="flex justify-between items-start"><p class="text-sm text-gray-500">ID: ${report.id} | ${new Date(report.submitted_at).toLocaleDateString()}</p><span class="status-badge ${statusClass}">${report.status.replace(/_/g, ' ')}</span></div><h3 class="font-bold text-lg mt-2">${report.address_text} (${report.zone || 'N/A'})</h3><div class="mt-4"><p class="text-sm font-semibold text-gray-600 mb-2">AI Detections:</p><div class="flex flex-wrap gap-2">${detections}</div></div><div class="mt-5">${actionHtml}</div></div></div>`; }
+        function addCardEventListeners(userType) { if (userType === 'municipal_official') { document.querySelectorAll('.update-status-btn').forEach(button => { button.addEventListener('click', async (e) => { const reportId = e.target.dataset.reportId; const newStatus = document.getElementById(`status-select-${reportId}`).value; await updateStatus(reportId, newStatus); fetchAndDisplayReports(userType); }); }); } else if (userType === 'inspection_officer') { document.querySelectorAll('.verify-btn').forEach(button => { button.addEventListener('click', async (e) => { const reportId = e.target.dataset.reportId; const approve = e.target.dataset.approve === 'true'; if (approve) { await verifyReport(reportId, true); fetchAndDisplayReports(userType); } else { const modal = document.getElementById('rejectionModal'); modal.style.display = 'flex'; document.getElementById('submitRejection').onclick = async () => { const reason = document.getElementById('rejectionReasonText').value; if (!reason) { alert('A reason is required.'); return; } await verifyReport(reportId, false, reason); modal.style.display = 'none'; document.getElementById('rejectionReasonText').value = ''; fetchAndDisplayReports(userType); }; document.getElementById('cancelRejection').onclick = () => { modal.style.display = 'none'; }; } }); }); } document.querySelectorAll('.report-image').forEach(image => { image.addEventListener('click', (e) => { document.getElementById('modalImage').src = e.target.dataset.imgSrc; document.getElementById('imageModal').style.display = 'flex'; }); }); }
+        async function updateStatus(reportId, newStatus) { await fetch(`${API_BASE_URL}/api/reports/${reportId}/status`, { method: 'PATCH', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ status: newStatus }) }); }
+        async function verifyReport(reportId, approve, reason = null) { await fetch(`${API_BASE_URL}/api/reports/${reportId}/verify`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ approve, reason }) }); }
+        async function fetchMcdPerformanceReport() { const response = await fetch(`${API_BASE_URL}/api/mcd-performance`, { headers: { 'Authorization': `Bearer ${token}` } }); const data = await response.json(); const container = document.getElementById('performanceContainer'); const rejections = data.rejection_details.map(r => `<tr><td class="border px-4 py-2">${r.report_id}</td><td class="border px-4 py-2">${r.address}</td><td class="border px-4 py-2">${r.reason}</td></tr>`).join(''); container.innerHTML = `<div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-center mb-6"><div class="p-4 bg-blue-100 rounded-lg"><p class="text-sm text-blue-800">Total Verified</p><p class="text-3xl font-bold">${data.total_marked_resolved}</p></div><div class="p-4 bg-green-100 rounded-lg"><p class="text-sm text-green-800">Approved Rate</p><p class="text-3xl font-bold">${data.approval_rate_percent.toFixed(1)}%</p></div><div class="p-4 bg-red-100 rounded-lg"><p class="text-sm text-red-800">Total Rejected</p><p class="text-3xl font-bold">${data.rejected_count}</p></div></div><div><h3 class="font-bold text-lg">Rejection Details:</h3><table class="table-auto w-full mt-2 text-left"><thead class="bg-gray-200"><tr><th class="px-4 py-2">ID</th><th class="px-4 py-2">Address</th><th class="px-4 py-2">Reason</th></tr></thead><tbody>${rejections || '<tr><td colspan="3" class="text-center p-4">No rejections yet.</td></tr>'}</tbody></table></div>`; }
+
+        initializeDashboard();
+    </script>
+</body>
+</html>

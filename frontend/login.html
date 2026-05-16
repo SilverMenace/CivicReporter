@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login - CivicReporter</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+    <div class="w-full max-w-sm bg-white p-8 rounded-lg shadow-md">
+        <h2 class="text-2xl font-bold text-center mb-6">Login to CivicReporter</h2>
+        <form id="loginForm">
+            <div class="mb-4">
+                <label class="block text-gray-700">Email (Username)</label>
+                <input type="email" id="email" class="w-full px-3 py-2 border rounded" required>
+            </div>
+            <div class="mb-6">
+                <label class="block text-gray-700">Password</label>
+                <input type="password" id="password" class="w-full px-3 py-2 border rounded" required>
+            </div>
+            <button type="submit" class="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600">Login</button>
+        </form>
+        <p class="text-center mt-4">No account? <a href="register.html" class="text-blue-500">Register here</a></p>
+        <div id="message" class="text-center mt-4"></div>
+    </div>
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const messageDiv = document.getElementById('message');
+
+            const formData = new URLSearchParams();
+            formData.append('username', email);
+            formData.append('password', password);
+
+            const response = await fetch('http://127.0.0.1:8000/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                localStorage.setItem('accessToken', data.access_token);
+                window.location.href = 'dashboard.html';
+            } else {
+                const error = await response.json();
+                messageDiv.textContent = `Error: ${error.detail}`;
+                messageDiv.className = 'text-red-500';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlalchemy
+opencv-python
+Pillow
+roboflow
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart
+PyMySQL
